@@ -82,9 +82,10 @@ export const nextRound = (room: Room, now: number, roundMs: number, _intermissio
 };
 
 export const submitAnswer = (room: Room, playerId: string, choice: Choice, serverTs: number) => {
-  if (room.status !== 'playing' || !room.round) return false;
+  if (!room.round) return false;
   const p = room.players[playerId];
   if (!p || !p.alive) return false;
+  if (serverTs < room.round.roundStartTs) return false;
   if (serverTs > room.round.deadlineTs) return false;
   if (room.round.responses[playerId]) return false;
   room.round.responses[playerId] = choice;
@@ -95,19 +96,28 @@ export const submitAnswer = (room: Room, playerId: string, choice: Choice, serve
 
 export const settleRound = (room: Room, serverTs: number) => {
   if (!room.round) return { eliminated: [], survivors: [], summary: { itemText: '', flies: false, perPlayer: {} as Record<string, RoundResultsDetail> } as RoundResultsSummary };
+  const r = room.round;
   const eliminated: string[] = [];
   const survivors: string[] = [];
-  const correct = room.round.flies ? 'ud' : 'not_ud';
+  const correct = r.flies ? 'ud' : 'not_ud';
 
   const perPlayer: Record<string, RoundResultsDetail> = {};
 
   Object.values(room.players).forEach(p => {
-    const resp = room.round!.responses[p.id];
+    // If player is already eliminated from an earlier round, do not overwrite their failure info
+    if (!p.alive) {
+      const resp = r.responses[p.id];
+      perPlayer[p.id] = { choice: resp, correct: false, inTime: true };
+      return;
+    }
+    const resp = r.responses[p.id];
     const ok = resp === correct;
-    const inTime = (p.respondedAt ?? Infinity) <= room.round!.deadlineTs;
+    const inTime = (p.respondedAt ?? Infinity) <= r.deadlineTs;
     perPlayer[p.id] = { choice: resp, correct: !!resp && ok, inTime };
     if (!resp || !ok || !inTime) {
       p.alive = false;
+      if (!p.failedAtWord) p.failedAtWord = r.itemText;
+      if (!p.failedChoice) p.failedChoice = resp;
       eliminated.push(p.id);
     } else {
       survivors.push(p.id);
@@ -119,7 +129,7 @@ export const settleRound = (room: Room, serverTs: number) => {
     room.status = 'game_over';
     room.winnerId = alive[0]?.id;
   }
-  const summary: RoundResultsSummary = { itemText: room.round.itemText, flies: room.round.flies, perPlayer };
+  const summary: RoundResultsSummary = { itemText: r.itemText, flies: r.flies, perPlayer };
   return { eliminated, survivors, summary };
 };
 
@@ -147,5 +157,22 @@ export const setSettings = (code: string, updater: Partial<RoomSettings>): Room 
     next.intermissionMs = Math.max(500, Math.min(5000, Math.floor(updater.intermissionMs)));
   }
   room.settings = next;
+  return room;
+};
+
+export const resetToLobby = (code: string): Room | null => {
+  const room = rooms.get(code);
+  if (!room) return null;
+  room.status = 'lobby';
+  room.round = undefined;
+  room.winnerId = undefined;
+  Object.values(room.players).forEach(p => {
+    p.alive = true;
+    p.ready = false;
+    p.respondedAt = undefined;
+    p.response = undefined;
+    p.failedAtWord = undefined;
+    p.failedChoice = undefined;
+  });
   return room;
 };

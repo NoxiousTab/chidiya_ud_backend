@@ -8,6 +8,8 @@ export interface Player {
   alive: boolean;
   respondedAt?: number; // server timestamp ms
   response?: Choice;
+  failedAtWord?: string;
+  failedChoice?: Choice;
 }
 
 export interface RoomSettings {
